@@ -1,10 +1,6 @@
 package stirling.software.SPDF.utils;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.InterruptedIOException;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,26 +9,25 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import io.github.pixee.security.BoundedLineReader;
 
+import lombok.extern.slf4j.Slf4j;
+import stirling.software.SPDF.model.ApplicationProperties;
+
+@Slf4j
 public class ProcessExecutor {
 
-    private static final Logger logger = LoggerFactory.getLogger(ProcessExecutor.class);
-
-    public enum Processes {
-        LIBRE_OFFICE,
-        OCR_MY_PDF,
-        PYTHON_OPENCV,
-        GHOSTSCRIPT,
-        WEASYPRINT,
-        INSTALL_APP,
-        CALIBRE
-    }
-
     private static final Map<Processes, ProcessExecutor> instances = new ConcurrentHashMap<>();
+    private static ApplicationProperties applicationProperties = new ApplicationProperties();
+    private final Semaphore semaphore;
+    private final boolean liveUpdates;
+    private long timeoutDuration;
+
+    private ProcessExecutor(int semaphoreLimit, boolean liveUpdates, long timeout) {
+        this.semaphore = new Semaphore(semaphoreLimit);
+        this.liveUpdates = liveUpdates;
+        this.timeoutDuration = timeout;
+    }
 
     public static ProcessExecutor getInstance(Processes processType) {
         return getInstance(processType, true);
@@ -44,37 +39,93 @@ public class ProcessExecutor {
                 key -> {
                     int semaphoreLimit =
                             switch (key) {
-                                case LIBRE_OFFICE -> 1;
-                                case OCR_MY_PDF -> 2;
-                                case PYTHON_OPENCV -> 8;
-                                case GHOSTSCRIPT -> 16;
-                                case WEASYPRINT -> 16;
-                                case INSTALL_APP -> 1;
-                                case CALIBRE -> 1;
+                                case LIBRE_OFFICE ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getSessionLimit()
+                                                .getLibreOfficeSessionLimit();
+                                case PDFTOHTML ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getSessionLimit()
+                                                .getPdfToHtmlSessionLimit();
+                                case PYTHON_OPENCV ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getSessionLimit()
+                                                .getPythonOpenCvSessionLimit();
+                                case WEASYPRINT ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getSessionLimit()
+                                                .getWeasyPrintSessionLimit();
+                                case INSTALL_APP ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getSessionLimit()
+                                                .getInstallAppSessionLimit();
+                                case TESSERACT ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getSessionLimit()
+                                                .getTesseractSessionLimit();
+                                case QPDF ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getSessionLimit()
+                                                .getQpdfSessionLimit();
+                                case CALIBRE ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getSessionLimit()
+                                                .getCalibreSessionLimit();
                             };
 
                     long timeoutMinutes =
                             switch (key) {
-                                case LIBRE_OFFICE -> 30;
-                                case OCR_MY_PDF -> 30;
-                                case PYTHON_OPENCV -> 30;
-                                case GHOSTSCRIPT -> 5;
-                                case WEASYPRINT -> 30;
-                                case INSTALL_APP -> 60;
-                                case CALIBRE -> 30;
+                                case LIBRE_OFFICE ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getTimeoutMinutes()
+                                                .getLibreOfficeTimeoutMinutes();
+                                case PDFTOHTML ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getTimeoutMinutes()
+                                                .getPdfToHtmlTimeoutMinutes();
+                                case PYTHON_OPENCV ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getTimeoutMinutes()
+                                                .getPythonOpenCvTimeoutMinutes();
+                                case WEASYPRINT ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getTimeoutMinutes()
+                                                .getWeasyPrintTimeoutMinutes();
+                                case INSTALL_APP ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getTimeoutMinutes()
+                                                .getInstallAppTimeoutMinutes();
+                                case TESSERACT ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getTimeoutMinutes()
+                                                .getTesseractTimeoutMinutes();
+                                case QPDF ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getTimeoutMinutes()
+                                                .getQpdfTimeoutMinutes();
+                                case CALIBRE ->
+                                        applicationProperties
+                                                .getProcessExecutor()
+                                                .getTimeoutMinutes()
+                                                .getCalibreTimeoutMinutes();
                             };
                     return new ProcessExecutor(semaphoreLimit, liveUpdates, timeoutMinutes);
                 });
-    }
-
-    private final Semaphore semaphore;
-    private final boolean liveUpdates;
-    private long timeoutDuration;
-
-    private ProcessExecutor(int semaphoreLimit, boolean liveUpdates, long timeout) {
-        this.semaphore = new Semaphore(semaphoreLimit);
-        this.liveUpdates = liveUpdates;
-        this.timeoutDuration = timeout;
     }
 
     public ProcessExecutorResult runCommandWithOutputHandling(List<String> command)
@@ -89,7 +140,7 @@ public class ProcessExecutor {
         semaphore.acquire();
         try {
 
-            logger.info("Running command: " + String.join(" ", command));
+            log.info("Running command: " + String.join(" ", command));
             ProcessBuilder processBuilder = new ProcessBuilder(command);
 
             // Use the working directory if it's set
@@ -116,13 +167,12 @@ public class ProcessExecutor {
                                                             errorReader, 5_000_000))
                                             != null) {
                                         errorLines.add(line);
-                                        if (liveUpdates) logger.info(line);
+                                        if (liveUpdates) log.info(line);
                                     }
                                 } catch (InterruptedIOException e) {
-                                    logger.warn(
-                                            "Error reader thread was interrupted due to timeout.");
+                                    log.warn("Error reader thread was interrupted due to timeout.");
                                 } catch (IOException e) {
-                                    e.printStackTrace();
+                                    log.error("exception", e);
                                 }
                             });
 
@@ -140,13 +190,12 @@ public class ProcessExecutor {
                                                             outputReader, 5_000_000))
                                             != null) {
                                         outputLines.add(line);
-                                        if (liveUpdates) logger.info(line);
+                                        if (liveUpdates) log.info(line);
                                     }
                                 } catch (InterruptedIOException e) {
-                                    logger.warn(
-                                            "Error reader thread was interrupted due to timeout.");
+                                    log.warn("Error reader thread was interrupted due to timeout.");
                                 } catch (IOException e) {
-                                    e.printStackTrace();
+                                    log.error("exception", e);
                                 }
                             });
 
@@ -169,32 +218,51 @@ public class ProcessExecutor {
             errorReaderThread.join();
             outputReaderThread.join();
 
-            if (!liveUpdates) {
-                if (outputLines.size() > 0) {
-                    String outputMessage = String.join("\n", outputLines);
-                    messages += outputMessage;
-                    logger.info("Command output:\n" + outputMessage);
+            if (outputLines.size() > 0) {
+                String outputMessage = String.join("\n", outputLines);
+                messages += outputMessage;
+                if (!liveUpdates) {
+                    log.info("Command output:\n" + outputMessage);
                 }
+            }
 
-                if (errorLines.size() > 0) {
-                    String errorMessage = String.join("\n", errorLines);
-                    messages += errorMessage;
-                    logger.warn("Command error output:\n" + errorMessage);
-                    if (exitCode != 0) {
-                        throw new IOException(
-                                "Command process failed with exit code "
-                                        + exitCode
-                                        + ". Error message: "
-                                        + errorMessage);
-                    }
+            if (errorLines.size() > 0) {
+                String errorMessage = String.join("\n", errorLines);
+                messages += errorMessage;
+                if (!liveUpdates) {
+                    log.warn("Command error output:\n" + errorMessage);
                 }
-            } else if (exitCode != 0) {
-                throw new IOException("Command process failed with exit code " + exitCode);
+                if (exitCode != 0) {
+                    throw new IOException(
+                            "Command process failed with exit code "
+                                    + exitCode
+                                    + ". Error message: "
+                                    + errorMessage);
+                }
+            }
+
+            if (exitCode != 0) {
+                throw new IOException(
+                        "Command process failed with exit code "
+                                + exitCode
+                                + "\nLogs: "
+                                + messages);
             }
         } finally {
             semaphore.release();
         }
         return new ProcessExecutorResult(exitCode, messages);
+    }
+
+    public enum Processes {
+        LIBRE_OFFICE,
+        PDFTOHTML,
+        PYTHON_OPENCV,
+        WEASYPRINT,
+        INSTALL_APP,
+        CALIBRE,
+        TESSERACT,
+        QPDF
     }
 
     public class ProcessExecutorResult {

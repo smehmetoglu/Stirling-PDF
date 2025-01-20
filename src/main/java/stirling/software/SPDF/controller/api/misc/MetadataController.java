@@ -12,21 +12,22 @@ import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ModelAttribute;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.WebDataBinder;
+import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import io.github.pixee.security.Filenames;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import lombok.extern.slf4j.Slf4j;
 import stirling.software.SPDF.model.api.misc.MetadataRequest;
 import stirling.software.SPDF.utils.WebResponseUtils;
+import stirling.software.SPDF.utils.propertyeditor.StringToMapPropertyEditor;
 
 @RestController
 @RequestMapping("/api/v1/misc")
+@Slf4j
 @Tag(name = "Misc", description = "Miscellaneous APIs")
 public class MetadataController {
 
@@ -38,6 +39,11 @@ public class MetadataController {
         }
         // Return the original string if it's not "undefined"
         return entry;
+    }
+
+    @InitBinder
+    public void initBinder(WebDataBinder binder) {
+        binder.registerCustomEditor(Map.class, "allRequestParams", new StringToMapPropertyEditor());
     }
 
     @PostMapping(consumes = "multipart/form-data", value = "/update-metadata")
@@ -136,7 +142,7 @@ public class MetadataController {
                 creationDateCal.setTime(
                         new SimpleDateFormat("yyyy/MM/dd HH:mm:ss").parse(creationDate));
             } catch (ParseException e) {
-                e.printStackTrace();
+                log.error("exception", e);
             }
             info.setCreationDate(creationDateCal);
         } else {
@@ -148,7 +154,7 @@ public class MetadataController {
                 modificationDateCal.setTime(
                         new SimpleDateFormat("yyyy/MM/dd HH:mm:ss").parse(modificationDate));
             } catch (ParseException e) {
-                e.printStackTrace();
+                log.error("exception", e);
             }
             info.setModificationDate(modificationDateCal);
         } else {

@@ -1,12 +1,12 @@
 package stirling.software.SPDF.controller.api.misc;
 
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -14,9 +14,9 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageTree;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,95 +28,29 @@ import io.github.pixee.security.Filenames;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import lombok.extern.slf4j.Slf4j;
 import stirling.software.SPDF.model.api.misc.RemoveBlankPagesRequest;
+import stirling.software.SPDF.service.CustomPDDocumentFactory;
 import stirling.software.SPDF.utils.PdfUtils;
 import stirling.software.SPDF.utils.WebResponseUtils;
 
 @RestController
 @RequestMapping("/api/v1/misc")
+@Slf4j
 @Tag(name = "Misc", description = "Miscellaneous APIs")
 public class BlankPageController {
 
-    private static final Logger logger = LoggerFactory.getLogger(BlankPageController.class);
+    private final CustomPDDocumentFactory pdfDocumentFactory;
 
-    @PostMapping(consumes = "multipart/form-data", value = "/remove-blanks")
-    @Operation(
-            summary = "Remove blank pages from a PDF file",
-            description =
-                    "This endpoint removes blank pages from a given PDF file. Users can specify the threshold and white percentage to tune the detection of blank pages. Input:PDF Output:PDF Type:SISO")
-    public ResponseEntity<byte[]> removeBlankPages(@ModelAttribute RemoveBlankPagesRequest request)
-            throws IOException, InterruptedException {
-        MultipartFile inputFile = request.getFileInput();
-        int threshold = request.getThreshold();
-        float whitePercent = request.getWhitePercent();
-
-        PDDocument document = null;
-        try {
-            document = Loader.loadPDF(inputFile.getBytes());
-            PDPageTree pages = document.getDocumentCatalog().getPages();
-            PDFTextStripper textStripper = new PDFTextStripper();
-
-            List<Integer> pagesToKeepIndex = new ArrayList<>();
-            int pageIndex = 0;
-            PDFRenderer pdfRenderer = new PDFRenderer(document);
-
-            for (PDPage page : pages) {
-                logger.info("checking page " + pageIndex);
-                textStripper.setStartPage(pageIndex + 1);
-                textStripper.setEndPage(pageIndex + 1);
-                String pageText = textStripper.getText(document);
-                boolean hasText = !pageText.trim().isEmpty();
-
-                Boolean blank = false;
-                if (hasText) {
-                    logger.info("page " + pageIndex + " has text, not blank");
-                    blank = false;
-                } else {
-                    boolean hasImages = PdfUtils.hasImagesOnPage(page);
-                    if (hasImages) {
-                        logger.info("page " + pageIndex + " has image, running blank detection");
-                        // Render image and save as temp file
-                        BufferedImage image = pdfRenderer.renderImageWithDPI(pageIndex, 30);
-                        blank = isBlankImage(image, threshold, whitePercent, threshold);
-                    }
-                }
-
-                if (blank) {
-                    logger.info("Skipping, Image was  blank for page #" + pageIndex);
-                } else {
-                    logger.info("page " + pageIndex + " has image which is not blank");
-                    pagesToKeepIndex.add(pageIndex);
-                }
-
-                pageIndex++;
-            }
-            // Remove pages not present in pagesToKeepIndex
-            List<Integer> pageIndices =
-                    IntStream.range(0, pages.getCount()).boxed().collect(Collectors.toList());
-            Collections.reverse(pageIndices); // Reverse to prevent index shifting during removal
-            for (Integer i : pageIndices) {
-                if (!pagesToKeepIndex.contains(i)) {
-                    pages.remove(i);
-                }
-            }
-
-            return WebResponseUtils.pdfDocToWebResponse(
-                    document,
-                    Filenames.toSimpleFileName(inputFile.getOriginalFilename())
-                                    .replaceFirst("[.][^.]+$", "")
-                            + "_blanksRemoved.pdf");
-        } catch (IOException e) {
-            e.printStackTrace();
-            return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
-        } finally {
-            if (document != null) document.close();
-        }
+    @Autowired
+    public BlankPageController(CustomPDDocumentFactory pdfDocumentFactory) {
+        this.pdfDocumentFactory = pdfDocumentFactory;
     }
 
     public static boolean isBlankImage(
             BufferedImage image, int threshold, double whitePercent, int blurSize) {
         if (image == null) {
-            logger.info("Error: Image is null");
+            log.info("Error: Image is null");
             return false;
         }
 
@@ -134,8 +68,105 @@ public class BlankPageController {
         }
 
         double whitePixelPercentage = (whitePixels / (double) totalPixels) * 100;
-        logger.info(String.format("Page has white pixel percent of %.2f%%", whitePixelPercentage));
+        log.info(String.format("Page has white pixel percent of %.2f%%", whitePixelPercentage));
 
         return whitePixelPercentage >= whitePercent;
+    }
+
+    @PostMapping(consumes = "multipart/form-data", value = "/remove-blanks")
+    @Operation(
+            summary = "Remove blank pages from a PDF file",
+            description =
+                    "This endpoint removes blank pages from a given PDF file. Users can specify the threshold and white percentage to tune the detection of blank pages. Input:PDF Output:PDF Type:SISO")
+    public ResponseEntity<byte[]> removeBlankPages(@ModelAttribute RemoveBlankPagesRequest request)
+            throws IOException, InterruptedException {
+        MultipartFile inputFile = request.getFileInput();
+        int threshold = request.getThreshold();
+        float whitePercent = request.getWhitePercent();
+
+        try (PDDocument document = Loader.loadPDF(inputFile.getBytes())) {
+            PDPageTree pages = document.getDocumentCatalog().getPages();
+            PDFTextStripper textStripper = new PDFTextStripper();
+
+            List<PDPage> nonBlankPages = new ArrayList<>();
+            List<PDPage> blankPages = new ArrayList<>();
+            int pageIndex = 0;
+
+            PDFRenderer pdfRenderer = new PDFRenderer(document);
+            pdfRenderer.setSubsamplingAllowed(true);
+            for (PDPage page : pages) {
+                log.info("checking page {}", pageIndex);
+                textStripper.setStartPage(pageIndex + 1);
+                textStripper.setEndPage(pageIndex + 1);
+                String pageText = textStripper.getText(document);
+                boolean hasText = !pageText.trim().isEmpty();
+
+                boolean blank = true;
+                if (hasText) {
+                    log.info("page {} has text, not blank", pageIndex);
+                    blank = false;
+                } else {
+                    boolean hasImages = PdfUtils.hasImagesOnPage(page);
+                    if (hasImages) {
+                        log.info("page {} has image, running blank detection", pageIndex);
+                        // Render image and save as temp file
+                        BufferedImage image = pdfRenderer.renderImageWithDPI(pageIndex, 30);
+                        blank = isBlankImage(image, threshold, whitePercent, threshold);
+                    }
+                }
+
+                if (blank) {
+                    log.info("Skipping, Image was  blank for page #{}", pageIndex);
+                    blankPages.add(page);
+                } else {
+                    log.info("page {} has image which is not blank", pageIndex);
+                    nonBlankPages.add(page);
+                }
+
+                pageIndex++;
+            }
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            ZipOutputStream zos = new ZipOutputStream(baos);
+
+            String filename =
+                    Filenames.toSimpleFileName(inputFile.getOriginalFilename())
+                            .replaceFirst("[.][^.]+$", "");
+
+            if (!nonBlankPages.isEmpty()) {
+                createZipEntry(zos, nonBlankPages, filename + "_nonBlankPages.pdf");
+            } else {
+                createZipEntry(zos, blankPages, filename + "_allBlankPages.pdf");
+            }
+
+            if (!nonBlankPages.isEmpty() && !blankPages.isEmpty()) {
+                createZipEntry(zos, blankPages, filename + "_blankPages.pdf");
+            }
+
+            zos.close();
+
+            log.info("Returning ZIP file: {}", filename + "_processed.zip");
+            return WebResponseUtils.boasToWebResponse(
+                    baos, filename + "_processed.zip", MediaType.APPLICATION_OCTET_STREAM);
+
+        } catch (IOException e) {
+            log.error("exception", e);
+            return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    public void createZipEntry(ZipOutputStream zos, List<PDPage> pages, String entryName)
+            throws IOException {
+        try (PDDocument document = pdfDocumentFactory.createNewDocument()) {
+
+            for (PDPage page : pages) {
+                document.addPage(page);
+            }
+
+            ZipEntry zipEntry = new ZipEntry(entryName);
+            zos.putNextEntry(zipEntry);
+            document.save(zos);
+            zos.closeEntry();
+        }
     }
 }

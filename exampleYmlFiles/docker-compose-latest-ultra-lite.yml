@@ -1,8 +1,7 @@
-version: '3.3'
 services:
   stirling-pdf:
     container_name: Stirling-PDF-Ultra-Lite
-    image: frooodle/s-pdf:latest-ultra-lite
+    image: stirlingtools/stirling-pdf:latest-ultra-lite
     deploy:
       resources:
         limits:
@@ -13,7 +12,7 @@ services:
       timeout: 10s
       retries: 16
     ports:
-      - 8080:8080
+      - "8080:8080"
     volumes:
       - /stirling/latest/config:/configs:rw
       - /stirling/latest/logs:/logs:rw
